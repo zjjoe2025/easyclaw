@@ -2163,6 +2163,47 @@ tbody td {
   margin-top: 0;
 }
 
+/* ===== Data Directory Settings ===== */
+
+.data-dir-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.data-dir-path {
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--color-bg-alt);
+  color: var(--color-text);
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+
+.badge-muted {
+  background: var(--color-bg-alt);
+  color: var(--color-text-secondary);
+}
+
+.data-dir-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.data-dir-restart-notice {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--color-warning-bg, var(--color-bg-alt));
+  color: var(--color-warning-text, var(--color-text));
+  font-size: 13px;
+  font-weight: 500;
+}
+
 /* ===== 33. STT Page ===== */
 
 .stt-section {

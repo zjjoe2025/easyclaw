@@ -153,6 +153,31 @@ export async function updateBrowserMode(mode: "standalone" | "cdp"): Promise<voi
   invalidateCache("settings");
 }
 
+// --- OpenClaw State Dir Override ---
+
+export interface OpenClawStateDirInfo {
+  override: string | null;
+  effective: string;
+  default: string;
+}
+
+export async function fetchOpenClawStateDir(): Promise<OpenClawStateDirInfo> {
+  return fetchJson<OpenClawStateDirInfo>("/settings/openclaw-state-dir");
+}
+
+export async function updateOpenClawStateDir(path: string): Promise<{ ok: boolean; restartRequired: boolean }> {
+  return fetchJson("/settings/openclaw-state-dir", {
+    method: "PUT",
+    body: JSON.stringify({ path }),
+  });
+}
+
+export async function resetOpenClawStateDir(): Promise<{ ok: boolean; restartRequired: boolean }> {
+  return fetchJson("/settings/openclaw-state-dir", {
+    method: "DELETE",
+  });
+}
+
 // --- Telemetry Event Tracking ---
 
 /** Fire-and-forget telemetry event relay to desktop main process. */

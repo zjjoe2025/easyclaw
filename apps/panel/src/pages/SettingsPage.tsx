@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchTelemetrySetting, updateTelemetrySetting, trackEvent, fetchAgentSettings, updateAgentSettings, fetchChatShowAgentEvents, updateChatShowAgentEvents, fetchChatPreserveToolEvents, updateChatPreserveToolEvents, fetchBrowserMode, updateBrowserMode, fetchAutoLaunchSetting, updateAutoLaunchSetting } from "../api/index.js";
+import { fetchTelemetrySetting, updateTelemetrySetting, trackEvent, fetchAgentSettings, updateAgentSettings, fetchChatShowAgentEvents, updateChatShowAgentEvents, fetchChatPreserveToolEvents, updateChatPreserveToolEvents, fetchBrowserMode, updateBrowserMode, fetchAutoLaunchSetting, updateAutoLaunchSetting, fetchOpenClawStateDir, updateOpenClawStateDir, resetOpenClawStateDir } from "../api/index.js";
+import type { OpenClawStateDirInfo } from "../api/index.js";
 import { Select } from "../components/Select.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 
@@ -40,6 +41,8 @@ export function SettingsPage() {
   const [autoLaunchEnabled, setAutoLaunchEnabled] = useState(false);
   const [browserMode, setBrowserMode] = useState<"standalone" | "cdp">("standalone");
   const [cdpConfirmOpen, setCdpConfirmOpen] = useState(false);
+  const [dataDirInfo, setDataDirInfo] = useState<OpenClawStateDirInfo | null>(null);
+  const [dataDirRestartNeeded, setDataDirRestartNeeded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,13 +54,14 @@ export function SettingsPage() {
   async function loadSettings() {
     try {
       setLoading(true);
-      const [enabled, agentSettings, chatEvents, toolEvents, curBrowserMode, autoLaunch] = await Promise.all([
+      const [enabled, agentSettings, chatEvents, toolEvents, curBrowserMode, autoLaunch, dirInfo] = await Promise.all([
         fetchTelemetrySetting(),
         fetchAgentSettings(),
         fetchChatShowAgentEvents(),
         fetchChatPreserveToolEvents(),
         fetchBrowserMode(),
         fetchAutoLaunchSetting(),
+        fetchOpenClawStateDir(),
       ]);
       setTelemetryEnabled(enabled);
       setDmScope(agentSettings.dmScope);
@@ -65,6 +69,7 @@ export function SettingsPage() {
       setPreserveToolEvents(toolEvents);
       setBrowserMode(curBrowserMode);
       setAutoLaunchEnabled(autoLaunch);
+      setDataDirInfo(dirInfo);
       setError(null);
     } catch (err) {
       setError(t("settings.agent.failedToLoad") + String(err));
@@ -174,6 +179,37 @@ export function SettingsPage() {
     }
   }
 
+  async function handleChangeDataDir() {
+    const { openFileDialog } = await import("../api/index.js");
+    const selected = await openFileDialog();
+    if (!selected) return;
+    try {
+      setSaving(true);
+      setError(null);
+      await updateOpenClawStateDir(selected);
+      setDataDirInfo((prev) => prev ? { ...prev, override: selected } : prev);
+      setDataDirRestartNeeded(true);
+    } catch (err) {
+      setError(t("settings.dataDir.failedToSave") + String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleResetDataDir() {
+    try {
+      setSaving(true);
+      setError(null);
+      await resetOpenClawStateDir();
+      setDataDirInfo((prev) => prev ? { ...prev, override: null } : prev);
+      setDataDirRestartNeeded(true);
+    } catch (err) {
+      setError(t("settings.dataDir.failedToReset") + String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (loading) {
     return (
       <div>
@@ -275,6 +311,44 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Data Directory Section */}
+      {dataDirInfo && (
+        <div className="section-card">
+          <h3>{t("settings.dataDir.title")}</h3>
+
+          <div>
+            <label className="form-label-block">
+              {t("settings.dataDir.label")}
+            </label>
+            <div className="data-dir-display">
+              <code className="data-dir-path">{dataDirInfo.override ?? dataDirInfo.effective}</code>
+              {dataDirInfo.override && <span className="badge">{t("settings.dataDir.custom")}</span>}
+              {!dataDirInfo.override && <span className="badge badge-muted">{t("settings.dataDir.default")}</span>}
+            </div>
+            <div className="form-hint">
+              {t("settings.dataDir.hint")}
+            </div>
+          </div>
+
+          <div className="data-dir-actions">
+            <button className="btn btn-secondary" onClick={handleChangeDataDir} disabled={saving}>
+              {t("settings.dataDir.change")}
+            </button>
+            {dataDirInfo.override && (
+              <button className="btn btn-secondary" onClick={handleResetDataDir} disabled={saving}>
+                {t("settings.dataDir.reset")}
+              </button>
+            )}
+          </div>
+
+          {dataDirRestartNeeded && (
+            <div className="data-dir-restart-notice">
+              {t("settings.dataDir.restartNotice")}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Telemetry & Privacy Section */}
       <div className="section-card">

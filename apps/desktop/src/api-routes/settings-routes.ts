@@ -1,6 +1,7 @@
-import { writeFileSync } from "node:fs";
+import { writeFileSync, existsSync } from "node:fs";
 import { createLogger } from "@easyclaw/logger";
 import { resolveGatewayPort } from "@easyclaw/core";
+import { resolveOpenClawStateDir as resolveDefaultStateDir } from "@easyclaw/core/node";
 import { resolveOpenClawConfigPath, readExistingConfig, resolveOpenClawStateDir, syncPermissions } from "@easyclaw/gateway";
 import type { RouteHandler } from "./api-context.js";
 import { sendJson, parseBody } from "./route-utils.js";
@@ -370,6 +371,40 @@ export const handleSettingsRoutes: RouteHandler = async (req, res, url, pathname
     }
 
     sendJson(res, 200, { permissions });
+    return true;
+  }
+
+  // --- OpenClaw State Dir Override ---
+  if (pathname === "/api/settings/openclaw-state-dir" && req.method === "GET") {
+    const override = storage.settings.get("openclaw_state_dir_override") || null;
+    const effective = resolveOpenClawStateDir();
+    const defaultDir = resolveDefaultStateDir({});
+    sendJson(res, 200, { override, effective, default: defaultDir });
+    return true;
+  }
+
+  if (pathname === "/api/settings/openclaw-state-dir" && req.method === "PUT") {
+    const body = (await parseBody(req)) as { path?: string };
+    if (!body.path || typeof body.path !== "string") {
+      sendJson(res, 400, { error: "Missing required field: path (string)" });
+      return true;
+    }
+    const dir = body.path.trim();
+    if (!existsSync(dir)) {
+      sendJson(res, 400, { error: "Directory does not exist" });
+      return true;
+    }
+    storage.settings.set("openclaw_state_dir_override", dir);
+    log.info(`OpenClaw state dir override set to: ${dir} (restart required)`);
+    sendJson(res, 200, { ok: true, restartRequired: true });
+    return true;
+  }
+
+  if (pathname === "/api/settings/openclaw-state-dir" && req.method === "DELETE") {
+    storage.settings.delete("openclaw_state_dir_override");
+    storage.settings.delete("openclaw_import_checked");
+    log.info("OpenClaw state dir override cleared (restart required)");
+    sendJson(res, 200, { ok: true, restartRequired: true });
     return true;
   }
 

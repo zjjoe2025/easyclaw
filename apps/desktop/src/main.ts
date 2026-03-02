@@ -21,7 +21,7 @@ import {
 import type { OAuthFlowResult, AcquiredOAuthCredentials } from "@easyclaw/gateway";
 import type { GatewayState } from "@easyclaw/gateway";
 import { parseProxyUrl, formatError, resolveGatewayPort, resolvePanelPort, resolveProxyRouterPort } from "@easyclaw/core";
-import { resolveUpdateMarkerPath } from "@easyclaw/core/node";
+import { resolveUpdateMarkerPath, resolveEasyClawHome } from "@easyclaw/core/node";
 import { createStorage } from "@easyclaw/storage";
 import { createSecretStore } from "@easyclaw/secrets";
 import { ArtifactPipeline, syncSkillsForRule, cleanupSkillsForDeletedRule } from "@easyclaw/rules";
@@ -238,11 +238,17 @@ app.whenReady().then(async () => {
   const { client: telemetryClient, heartbeatTimer } = initTelemetry(storage, deviceId, locale);
 
   // --- First-start OpenClaw import ---
+  // Only show the import wizard for truly new users:
+  //  1. openclaw_import_checked is not set (never checked before)
+  //  2. Standalone OpenClaw exists at ~/.openclaw/openclaw.json
+  //  3. EasyClaw's own state dir (~/.easyclaw/openclaw/) does NOT yet exist
+  //     (if it exists, this is an existing EasyClaw user upgrading — skip silently)
   const importChecked = storage.settings.get("openclaw_import_checked");
   if (!importChecked) {
     const standaloneDir = join(homedir(), ".openclaw");
     const standaloneConfig = join(standaloneDir, "openclaw.json");
-    if (existsSync(standaloneConfig)) {
+    const defaultStateDir = join(resolveEasyClawHome(), "openclaw");
+    if (existsSync(standaloneConfig) && !existsSync(defaultStateDir)) {
       const { response } = await dialog.showMessageBox({
         type: "question",
         buttons: [locale === "zh" ? "使用现有数据" : "Use existing data", locale === "zh" ? "全新开始" : "Start fresh"],
