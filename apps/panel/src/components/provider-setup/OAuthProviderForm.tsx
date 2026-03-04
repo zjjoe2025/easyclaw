@@ -69,7 +69,7 @@ export function OAuthProviderForm({
       {oauthManualMode ? (
         <div className="mb-sm">
           <div className="info-box info-box-yellow">
-            {t("providers.oauthManualInfo")}
+            {t(`providers.oauthManualInfo_${provider}`)}
           </div>
           <div className="mb-sm">
             <div className="form-label text-secondary">
@@ -102,7 +102,7 @@ export function OAuthProviderForm({
               className="input-full input-mono"
             />
             <small className="form-help-sm">
-              {t("providers.oauthManualCallbackHelp")}
+              {t(`providers.oauthManualCallbackHelp_${provider}`)}
             </small>
           </div>
         </div>
@@ -118,12 +118,12 @@ export function OAuthProviderForm({
             className="input-full input-mono input-readonly"
           />
           <small className="form-help-sm">
-            {t("providers.oauthTokenHelp")}
+            {t(`providers.oauthTokenHelp_${provider}`)}
           </small>
         </div>
       ) : (
         <div className="info-box info-box-green">
-          {t("providers.oauthGeminiInfo")}
+          {t(`providers.oauthInfo_${provider}`)}
         </div>
       )}
 
@@ -177,7 +177,7 @@ export function OAuthProviderForm({
             onClick={handleOAuth}
             disabled={oauthLoading}
           >
-            {oauthLoading ? t("providers.oauthLoading") : t("providers.oauthSignIn")}
+            {oauthLoading ? t("providers.oauthLoading") : t(`providers.oauthSignIn_${provider}`)}
           </button>
         )}
       </div>

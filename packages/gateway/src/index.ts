@@ -81,4 +81,6 @@ export {
 export { resolveVolcengineSttCliPath } from "./volcengine-stt-cli-path.js";
 export { runGeminiOAuthFlow, acquireGeminiOAuthToken, saveGeminiOAuthCredentials, validateGeminiAccessToken, startManualOAuthFlow, completeManualOAuthFlow } from "./oauth-flow.js";
 export type { OAuthFlowCallbacks, OAuthFlowResult, AcquiredOAuthCredentials } from "./oauth-flow.js";
+export { acquireCodexOAuthToken, saveCodexOAuthCredentials, validateCodexAccessToken } from "./openai-codex-oauth.js";
+export type { AcquiredCodexOAuthCredentials, OpenAICodexOAuthCredentials } from "./openai-codex-oauth.js";
 export { enrichedPath, findInPath, ensureCliAvailable } from "./cli-utils.js";

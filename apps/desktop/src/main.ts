@@ -17,8 +17,11 @@ import {
   validateGeminiAccessToken,
   startManualOAuthFlow,
   completeManualOAuthFlow,
+  acquireCodexOAuthToken,
+  saveCodexOAuthCredentials,
+  validateCodexAccessToken,
 } from "@easyclaw/gateway";
-import type { OAuthFlowResult, AcquiredOAuthCredentials } from "@easyclaw/gateway";
+import type { OAuthFlowResult, AcquiredOAuthCredentials, AcquiredCodexOAuthCredentials } from "@easyclaw/gateway";
 import type { GatewayState } from "@easyclaw/gateway";
 import { parseProxyUrl, formatError, resolveGatewayPort, resolvePanelPort, resolveProxyRouterPort } from "@easyclaw/core";
 import { resolveUpdateMarkerPath, resolveEasyClawHome } from "@easyclaw/core/node";
@@ -326,7 +329,9 @@ app.whenReady().then(async () => {
     : resolve(dirname(fileURLToPath(import.meta.url)), "../../../extensions");
 
   // Temporary storage for pending OAuth credentials (between acquire and save steps)
-  let pendingOAuthCreds: AcquiredOAuthCredentials | null = null;
+  let pendingOAuthCreds: AcquiredOAuthCredentials | AcquiredCodexOAuthCredentials | null = null;
+  // Track which provider the pending creds belong to
+  let pendingOAuthProvider: string | null = null;
   // PKCE verifier for pending manual OAuth flow (between start and manual-complete steps)
   let pendingManualOAuthVerifier: string | null = null;
 
@@ -927,6 +932,21 @@ app.whenReady().then(async () => {
     },
     onOAuthAcquire: async (provider: string): Promise<{ email?: string; tokenPreview: string; manualMode?: boolean; authUrl?: string }> => {
       const proxyRouterUrl = `http://127.0.0.1:${resolveProxyRouterPort()}`;
+
+      // OpenAI Codex OAuth flow
+      if (provider === "openai-codex") {
+        const acquired = await acquireCodexOAuthToken({
+          openUrl: (url) => shell.openExternal(url),
+          onStatusUpdate: (msg) => log.info(`OAuth: ${msg}`),
+          proxyUrl: proxyRouterUrl,
+        });
+        pendingOAuthCreds = acquired;
+        pendingOAuthProvider = provider;
+        log.info(`Codex OAuth acquired for ${provider}`);
+        return { email: acquired.email, tokenPreview: acquired.tokenPreview };
+      }
+
+      // Gemini OAuth flow (default)
       try {
         const acquired = await acquireGeminiOAuthToken({
           openUrl: (url) => shell.openExternal(url),
@@ -935,6 +955,7 @@ app.whenReady().then(async () => {
         });
         // Store credentials temporarily until onOAuthSave is called
         pendingOAuthCreds = acquired;
+        pendingOAuthProvider = provider;
         log.info(`OAuth acquired for ${provider}, email=${acquired.email ?? "(none)"}`);
         return { email: acquired.email, tokenPreview: acquired.tokenPreview };
       } catch (err) {
@@ -946,6 +967,7 @@ app.whenReady().then(async () => {
             proxyUrl: proxyRouterUrl,
           });
           pendingManualOAuthVerifier = manual.verifier;
+          pendingOAuthProvider = provider;
           await shell.openExternal(manual.authUrl);
           return { email: undefined, tokenPreview: "", manualMode: true, authUrl: manual.authUrl };
         }
@@ -970,13 +992,6 @@ app.whenReady().then(async () => {
       }
       const creds = pendingOAuthCreds;
 
-      // Priority: per-key proxy > proxy router (system proxy) > direct
-      const validationProxy = options.proxyUrl?.trim() || `http://127.0.0.1:${resolveProxyRouterPort()}`;
-      const validation = await validateGeminiAccessToken(creds.credentials.access, validationProxy, creds.credentials.projectId);
-      if (!validation.valid) {
-        throw new Error(validation.error || "Token validation failed");
-      }
-
       // Parse proxy URL if provided
       let proxyBaseUrl: string | null = null;
       let proxyCredentials: string | null = null;
@@ -988,18 +1003,44 @@ app.whenReady().then(async () => {
         }
       }
 
-      // Save credentials + create provider key
-      const result = await saveGeminiOAuthCredentials(creds.credentials, storage, secretStore, {
-        proxyBaseUrl,
-        proxyCredentials,
-        label: options.label,
-        model: options.model,
-      });
-      pendingOAuthCreds = null;
+      const validationProxy = options.proxyUrl?.trim() || `http://127.0.0.1:${resolveProxyRouterPort()}`;
+      let result: OAuthFlowResult;
+      let activeProvider: string;
 
-      // Sync auth profiles + rewrite full config with google-gemini-cli model.
-      // Switch the active provider to "gemini" so buildFullGatewayConfig() picks it up.
-      storage.settings.set("llm-provider", "gemini");
+      if (pendingOAuthProvider === "openai-codex") {
+        // OpenAI Codex OAuth save — skip validation; the successful OAuth flow
+        // is sufficient proof the token is valid, and Codex tokens don't have
+        // access to the standard /v1/models endpoint used for validation.
+        const codexCreds = creds as AcquiredCodexOAuthCredentials;
+        result = await saveCodexOAuthCredentials(codexCreds.credentials, storage, secretStore, {
+          proxyBaseUrl,
+          proxyCredentials,
+          label: options.label,
+          model: options.model,
+        });
+        activeProvider = "openai-codex";
+      } else {
+        // Gemini OAuth save (default)
+        const geminiCreds = creds as AcquiredOAuthCredentials;
+        const validation = await validateGeminiAccessToken(geminiCreds.credentials.access, validationProxy, geminiCreds.credentials.projectId);
+        if (!validation.valid) {
+          throw new Error(validation.error || "Token validation failed");
+        }
+        result = await saveGeminiOAuthCredentials(geminiCreds.credentials, storage, secretStore, {
+          proxyBaseUrl,
+          proxyCredentials,
+          label: options.label,
+          model: options.model,
+        });
+        activeProvider = "gemini";
+      }
+
+      pendingOAuthCreds = null;
+      pendingOAuthProvider = null;
+
+      // Sync auth profiles + rewrite full config.
+      // Switch the active provider so buildFullGatewayConfig() picks it up.
+      storage.settings.set("llm-provider", activeProvider);
       await syncAllAuthProfiles(stateDir, storage, secretStore);
       await writeProxyRouterConfig(storage, secretStore, lastSystemProxy);
       writeGatewayConfig(buildFullGatewayConfig());
