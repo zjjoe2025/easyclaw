@@ -41,6 +41,11 @@ type Pending = {
   reject: (err: unknown) => void;
 };
 
+/** Application-level keepalive interval (ms). */
+const KEEPALIVE_INTERVAL_MS = 25_000;
+/** If a keepalive ping doesn't get a pong within this time, assume dead. */
+const KEEPALIVE_TIMEOUT_MS = 10_000;
+
 export class GatewayChatClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, Pending>();
@@ -48,6 +53,9 @@ export class GatewayChatClient {
   private connectNonce: string | null = null;
   private connectSent = false;
   private backoffMs = 800;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private keepaliveTimeout: ReturnType<typeof setTimeout> | null = null;
+  private authenticated = false;
 
   constructor(private opts: GatewayChatClientOptions) {}
 
@@ -58,6 +66,7 @@ export class GatewayChatClient {
 
   stop(): void {
     this.closed = true;
+    this.stopKeepalive();
     this.ws?.close();
     this.ws = null;
     this.flushPending(new Error("client stopped"));
@@ -85,6 +94,7 @@ export class GatewayChatClient {
     if (this.closed) return;
     this.connectSent = false;
     this.connectNonce = null;
+    this.authenticated = false;
 
     const ws = new WebSocket(this.opts.url);
     this.ws = ws;
@@ -93,6 +103,8 @@ export class GatewayChatClient {
 
     ws.addEventListener("close", () => {
       this.ws = null;
+      this.authenticated = false;
+      this.stopKeepalive();
       this.flushPending(new Error("gateway disconnected"));
       this.opts.onDisconnected?.();
       this.scheduleReconnect();
@@ -134,12 +146,48 @@ export class GatewayChatClient {
     this.request<GatewayHelloOk>("connect", params)
       .then((hello) => {
         this.backoffMs = 800;
+        this.authenticated = true;
+        this.startKeepalive();
         this.opts.onConnected?.(hello);
       })
       .catch(() => {
         this.ws?.close();
       });
   }
+
+  // --- keepalive ---
+
+  private startKeepalive(): void {
+    this.stopKeepalive();
+    this.keepaliveTimer = setInterval(() => this.sendPing(), KEEPALIVE_INTERVAL_MS);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer) { clearInterval(this.keepaliveTimer); this.keepaliveTimer = null; }
+    if (this.keepaliveTimeout) { clearTimeout(this.keepaliveTimeout); this.keepaliveTimeout = null; }
+  }
+
+  private sendPing(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.authenticated) return;
+
+    // Set a deadline — if no response arrives, force-close so onDisconnected fires.
+    this.keepaliveTimeout = setTimeout(() => {
+      console.warn("[gateway-client] keepalive timeout — closing connection");
+      this.ws?.close();
+    }, KEEPALIVE_TIMEOUT_MS);
+
+    // Use a lightweight RPC call as an application-level ping.
+    // "sessions.list" with limit 0 is cheap and always available.
+    this.request("sessions.list", { limit: 0 })
+      .then(() => {
+        if (this.keepaliveTimeout) { clearTimeout(this.keepaliveTimeout); this.keepaliveTimeout = null; }
+      })
+      .catch(() => {
+        // Request rejected — connection is likely dead, close handler will fire.
+      });
+  }
+
+  // --- message handling ---
 
   private handleMessage(raw: string): void {
     let parsed: unknown;

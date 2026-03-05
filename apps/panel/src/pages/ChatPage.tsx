@@ -118,6 +118,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
   allFetchedRef.current = allFetched;
   const sendTimeRef = useRef<number>(0);
   const needsDisconnectErrorRef = useRef(false);
+  const initialConnectDoneRef = useRef(false);
   const lastAgentStreamRef = useRef<string | null>(null);
   const showAgentEventsRef = useRef(true);
 
@@ -623,9 +624,15 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
           token: info.token,
           onConnected: (hello: GatewayHelloOk) => {
             if (cancelled) return;
-            // Use session key from gateway snapshot if available
+            // Use session key from gateway snapshot ONLY on initial connect.
+            // On reconnects (e.g. CDP mode switch, keepalive timeout) the user
+            // may be viewing a different tab — overriding it would cause
+            // session data mixing.
             const mainKey = hello.snapshot?.sessionDefaults?.mainSessionKey;
-            if (mainKey) sessionManager.setActiveSessionKey(mainKey);
+            if (mainKey && !initialConnectDoneRef.current) {
+              initialConnectDoneRef.current = true;
+              sessionManager.setActiveSessionKey(mainKey);
+            }
             setConnectionState("connected");
             loadHistory(client).then(() => {
               // Show deferred disconnect error AFTER history is loaded,
@@ -707,6 +714,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
       clientRef.current = null;
       bridgeRef.current?.disconnect();
       bridgeRef.current = null;
+      initialConnectDoneRef.current = false;
     };
   }, [loadHistory, handleEvent]);
 
