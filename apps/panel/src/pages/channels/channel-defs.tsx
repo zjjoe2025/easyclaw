@@ -4,7 +4,6 @@ import type { ChannelsStatusSnapshot, ChannelAccountSnapshot, WeComBindingStatus
 export const KNOWN_CHANNELS = [
   { id: "mobile", labelKey: "nav.mobile", tutorialUrl: "", tooltip: "mobile.description" },
   { id: "telegram", labelKey: "channels.channelTelegram", tutorialUrl: "https://docs.openclaw.ai/channels/telegram", tooltip: "channels.tooltipTelegram" },
-  { id: "whatsapp", labelKey: "channels.channelWhatsApp", tutorialUrl: "https://docs.openclaw.ai/channels/whatsapp", tooltip: "channels.tooltipWhatsApp" },
   { id: "discord", labelKey: "channels.channelDiscord", tutorialUrl: "https://docs.openclaw.ai/channels/discord", tooltip: "channels.tooltipDiscord" },
   { id: "slack", labelKey: "channels.channelSlack", tutorialUrl: "https://docs.openclaw.ai/channels/slack", tooltip: "channels.tooltipSlack" },
   { id: "googlechat", labelKey: "channels.channelGoogleChat", tutorialUrl: "https://docs.openclaw.ai/channels/googlechat", tooltip: "channels.tooltipGoogleChat" },
@@ -19,7 +18,7 @@ export const KNOWN_CHANNELS = [
 
 // Channels that require services blocked in mainland China (GFW)
 export const CHINA_BLOCKED_CHANNELS = new Set([
-  "telegram", "whatsapp", "discord", "signal", "line", "googlechat", "slack",
+  "telegram", "discord", "signal", "line", "googlechat", "slack",
 ]);
 
 export function StatusBadge({ status, t }: { status: boolean | null | undefined; t: (key: string) => string }) {
