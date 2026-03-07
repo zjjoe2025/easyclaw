@@ -1,6 +1,26 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
 
-import { MobileSyncEngine, RelayTransport } from "./dist/index.mjs";
+import { MobileSyncEngine, RelayTransport, RELAY_MAX_CLIENT_BYTES, RELAY_MAX_CLIENT_MB } from "./dist/index.mjs";
+
+const MIME_BY_EXT = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv",
+    ".json": "application/json", ".xml": "application/xml",
+    ".zip": "application/zip", ".gz": "application/gzip",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+    ".mp4": "video/mp4", ".webm": "video/webm",
+};
 
 // Shared relay transport — one WebSocket for all paired phones
 let relayTransport = null;
@@ -120,13 +140,62 @@ const plugin = {
                     },
                     async sendMedia(ctx) {
                         const engine = resolveEngine(ctx.to);
-                        if (engine) {
-                            engine.queueOutbound(ctx.to, { type: 'image', mediaUrl: ctx.mediaUrl, text: ctx.text });
+                        if (!engine) {
+                            return { channel: "mobile", messageId: randomUUID(), chatId: ctx.to ?? "mobile" };
+                        }
+                        try {
+                            const filePath = ctx.mediaUrl;
+                            const buf = await readFile(filePath);
+                            if (buf.length > RELAY_MAX_CLIENT_BYTES) {
+                                const sizeMB = (buf.length / (1024 * 1024)).toFixed(1);
+                                console.error(`[MobileChat Plugin] File too large (${sizeMB} MB), skipping send`);
+                                engine.queueOutbound(ctx.to, { type: 'text', text: `[File too large: ${sizeMB} MB, limit is ${RELAY_MAX_CLIENT_MB} MB]` });
+                                return { channel: "mobile", messageId: randomUUID(), chatId: ctx.to ?? "mobile" };
+                            }
+                            const ext = extname(filePath).toLowerCase();
+                            const mimeType = MIME_BY_EXT[ext] || "application/octet-stream";
+                            const isImage = mimeType.startsWith("image/");
+                            const b64 = buf.toString("base64");
+                            engine.queueOutbound(ctx.to, {
+                                type: isImage ? "image" : "file",
+                                data: b64,
+                                mimeType,
+                                text: ctx.text || "",
+                                fileName: basename(filePath),
+                            });
+                        } catch (err) {
+                            console.error("[MobileChat Plugin] Failed to read media file:", err);
+                            engine.queueOutbound(ctx.to, { type: 'text', text: ctx.text || '[File]' });
                         }
                         return { channel: "mobile", messageId: randomUUID(), chatId: ctx.to ?? "mobile" };
                     },
                 },
             },
+        });
+
+        // Forward tool events to paired mobile devices via plugin hooks.
+        // Hooks are global — filter by sessionKey to only push to mobile sessions.
+        // Disabled: relay server bandwidth impact unknown — enable after load testing.
+        const ENABLE_TOOL_STATUS_FORWARDING = false;
+        api.on("before_tool_call", (_event, ctx) => {
+            if (!ENABLE_TOOL_STATUS_FORWARDING) return;
+            const sk = ctx.sessionKey;
+            if (!sk) return;
+            for (const engine of syncEngines.values()) {
+                if (engine.activeSessionKeys.has(sk)) {
+                    engine.sendToolStatus(ctx.toolName, "start");
+                }
+            }
+        });
+        api.on("after_tool_call", (_event, ctx) => {
+            if (!ENABLE_TOOL_STATUS_FORWARDING) return;
+            const sk = ctx.sessionKey;
+            if (!sk) return;
+            for (const engine of syncEngines.values()) {
+                if (engine.activeSessionKeys.has(sk)) {
+                    engine.sendToolStatus(ctx.toolName, "result");
+                }
+            }
         });
 
         // Start or update a sync engine for a specific paired phone

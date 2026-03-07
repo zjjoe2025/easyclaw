@@ -31,6 +31,8 @@ export class MobileSyncEngine {
     public pairingId: string;
     public mobileOnline: boolean = false;
     public onUnpaired: (() => void) | null = null;
+    /** Session keys this engine has dispatched to — used by plugin hooks to route tool events. */
+    public activeSessionKeys: Set<string> = new Set();
 
     constructor(
         private readonly api: any, // GatewayPluginApi
@@ -180,6 +182,18 @@ export class MobileSyncEngine {
         setTimeout(() => this.stop(), 200);
     }
 
+    /** Send an ephemeral tool status event to the mobile peer (not queued in outbox). */
+    public sendToolStatus(toolName: string, phase: "start" | "result") {
+        this.transport.send(this.pairingId, {
+            type: "tool_status",
+            id: randomUUID(),
+            toolName,
+            phase,
+            sender: "desktop",
+            timestamp: Date.now(),
+        });
+    }
+
     public sendReaction(targetId: string, emoji: string) {
         this.transport.send(this.pairingId, {
             type: "reaction",
@@ -189,6 +203,42 @@ export class MobileSyncEngine {
             sender: "desktop",
             timestamp: Date.now(),
         });
+    }
+
+    /** Reset the agent session: archive transcripts and clear engine state. */
+    public async resetSession() {
+        const core = this.api.runtime;
+        const cfg = this.api.config;
+        const route = core.channel.routing.resolveAgentRoute({
+            cfg,
+            channel: "mobile",
+            from: this.mobileDeviceId,
+            peer: { kind: "direct", id: this.mobileDeviceId },
+        });
+        const storePath = core.channel.session.resolveStorePath(
+            (cfg.session as Record<string, unknown> | undefined)?.store as string | undefined,
+            { agentId: route.agentId },
+        );
+        // Archive the session transcript file by renaming it (same as sessions.reset)
+        const sessionDir = storePath || join(homedir(), ".openclaw", "sessions");
+        const sessionFile = join(sessionDir, `${route.sessionKey}.json`);
+        const archiveName = `${route.sessionKey}.reset-${Date.now()}.json`;
+        const archiveFile = join(sessionDir, archiveName);
+        try {
+            await fs.rename(sessionFile, archiveFile);
+            console.log(`[MobileSync:${this.pairingId.slice(0,8)}] Archived session file: ${archiveName}`);
+        } catch (err: any) {
+            if (err.code !== "ENOENT") throw err;
+            // No session file yet — nothing to archive
+        }
+        // Clear engine outbox and sent history
+        this.outbox.clear();
+        this.sentHistory.length = 0;
+        this.processedIds.clear();
+        this.processedIdsOrder.length = 0;
+        this.activeSessionKeys.clear();
+        this.scheduleSave();
+        console.log(`[MobileSync:${this.pairingId.slice(0,8)}] Session reset complete. sessionKey=${route.sessionKey}`);
     }
 
     public get isRelayConnected(): boolean {
@@ -275,6 +325,28 @@ export class MobileSyncEngine {
                 console.log(`[MobileSync:${this.pairingId.slice(0,8)}] Received reaction from mobile: ${msg.emoji} on ${msg.targetId?.slice(0,8)}`);
                 break;
 
+            case "reset_req":
+                console.log(`[MobileSync:${this.pairingId.slice(0,8)}] Received reset request from mobile`);
+                try {
+                    await this.resetSession();
+                    this.transport.send(this.pairingId, {
+                        type: "reset_ack",
+                        id: randomUUID(),
+                        success: true,
+                        timestamp: Date.now(),
+                    });
+                } catch (err: any) {
+                    console.error("[MobileSync] Reset failed:", err.message);
+                    this.transport.send(this.pairingId, {
+                        type: "reset_ack",
+                        id: randomUUID(),
+                        success: false,
+                        error: err.message,
+                        timestamp: Date.now(),
+                    });
+                }
+                break;
+
             case "msg":
                 // Always ACK (so mobile UI shows delivered promptly)
                 this.transport.send(this.pairingId, { type: "ack", id: msg.id });
@@ -356,6 +428,7 @@ export class MobileSyncEngine {
                 accountId: this.pairingId,
                 peer: { kind: "direct", id: this.mobileDeviceId },
             });
+            this.activeSessionKeys.add(route.sessionKey);
 
             const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
             const storePath = core.channel.session.resolveStorePath(
