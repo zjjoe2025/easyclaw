@@ -77,7 +77,7 @@ function fixSemanticErrors(config: Record<string, unknown>): string[] {
     if (result.success) break;
 
     const issues = result.error.issues.filter(
-      (i) => i.code !== "unrecognized_keys",
+      (i: { code: string }) => i.code !== "unrecognized_keys",
     );
     if (issues.length === 0) break;
 
@@ -213,7 +213,14 @@ export function buildExtraProviderConfigs(): Record<string, {
     }>;
   }> = {};
 
+  // OpenClaw/pi-ai already ships a native openai-codex provider with the
+  // correct ChatGPT subscription endpoint (chatgpt.com/backend-api). If we
+  // inject our own config for it here, we override that built-in provider and
+  // accidentally force Codex OAuth traffic onto the API platform endpoint.
+  const BUILTIN_PROVIDER_OVERRIDES = new Set(["openai-codex"]);
+
   for (const provider of ALL_PROVIDERS) {
+    if (BUILTIN_PROVIDER_OVERRIDES.has(provider)) continue;
     const meta = getProviderMeta(provider);
     const models = meta?.extraModels;
     if (!models || models.length === 0) continue;

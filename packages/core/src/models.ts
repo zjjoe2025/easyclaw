@@ -75,11 +75,13 @@ export interface SubscriptionPlan {
   catalogProvider?: string;
   /** Extra models specific to this plan. */
   extraModels?: ModelConfig[];
+  /** Fallback models used locally until upstream catalog catches up. */
+  fallbackModels?: ModelConfig[];
   /** Preferred default model ID for this plan. */
   preferredModel?: string;
   /** API format used by this plan's endpoint (defaults to "openai-completions"). */
   api?: string;
-  /** Lightweight model ID for API-key validation when extraModels / catalog aren't loaded yet. */
+  /** Lightweight model ID for API-key validation when local models / catalog aren't loaded yet. */
   validationModel?: string;
 }
 
@@ -106,11 +108,13 @@ export interface ProviderMeta {
    * These are our own additions that won't appear in OpenClaw's models.json.
    */
   extraModels?: ModelConfig[];
+  /** Fallback models used locally until upstream catalog catches up. */
+  fallbackModels?: ModelConfig[];
   /** Preferred default model ID for this provider. */
   preferredModel?: string;
   /** API format used by this provider's endpoint (defaults to "openai-completions"). */
   api?: string;
-  /** Lightweight model ID for API-key validation when extraModels / catalog aren't loaded yet. */
+  /** Lightweight model ID for API-key validation when local models / catalog aren't loaded yet. */
   validationModel?: string;
   /** Subscription plans that are logically children of this provider. */
   subscriptionPlans?: SubscriptionPlan[];
@@ -125,11 +129,13 @@ export interface ResolvedProviderMeta {
   envVar: string;
   subscriptionUrl?: string;
   oauth?: boolean;
+  catalogProvider?: string;
   extraModels?: ModelConfig[];
+  fallbackModels?: ModelConfig[];
   preferredModel?: string;
   /** API format used by this provider's endpoint (defaults to "openai-completions"). */
   api?: string;
-  /** Lightweight model ID for API-key validation when extraModels / catalog aren't loaded yet. */
+  /** Lightweight model ID for API-key validation when fallbackModels / catalog aren't loaded yet. */
   validationModel?: string;
 }
 
@@ -167,7 +173,7 @@ export const PROVIDERS: Record<RootProvider, ProviderMeta> = {
         api: "openai-codex-responses",
         validationModel: "gpt-5.2-codex",
         preferredModel: "gpt-5.2-codex",
-        extraModels: [
+        fallbackModels: [
           { provider: "openai-codex", modelId: "gpt-5.2-codex", displayName: "GPT-5.2 Codex" },
           { provider: "openai-codex", modelId: "gpt-5-codex", displayName: "GPT-5 Codex" },
           { provider: "openai-codex", modelId: "gpt-5.1-codex", displayName: "GPT-5.1 Codex" },
@@ -761,6 +767,7 @@ for (const root of Object.keys(PROVIDERS) as RootProvider[]) {
     envVar: meta.envVar,
     subscriptionUrl: meta.subscriptionUrl,
     extraModels: meta.extraModels,
+    fallbackModels: meta.fallbackModels,
     preferredModel: meta.preferredModel,
     api: meta.api,
     validationModel: meta.validationModel,
@@ -776,7 +783,9 @@ for (const root of Object.keys(PROVIDERS) as RootProvider[]) {
       envVar: plan.envVar,
       subscriptionUrl: plan.subscriptionUrl,
       oauth: plan.oauth,
+      catalogProvider: plan.catalogProvider,
       extraModels: plan.extraModels,
+      fallbackModels: plan.fallbackModels,
       preferredModel: plan.preferredModel,
       api: plan.api ?? meta.api, // inherit parent's API format
       validationModel: plan.validationModel ?? meta.validationModel, // inherit parent's validation model
@@ -799,16 +808,29 @@ export function getProviderMeta(provider: LLMProvider): ResolvedProviderMeta | u
  * Resolve the gateway provider name for a given provider ID.
  *
  * Subscription plans that have their own `extraModels` are registered as
- * separate providers in the gateway and keep their own name. Plans without
- * `extraModels` share the parent provider's gateway identity.
+ * separate providers in the gateway and keep their own name. Plans that map
+ * directly to a built-in catalog provider (for example `openai-codex`) also
+ * keep their own gateway identity. Other plans share the parent provider.
  */
 export function resolveGatewayProvider(provider: LLMProvider): string {
   const parent = _parentMap.get(provider);
   if (!parent) return provider; // root provider
   // Plan has its own extraModels → registered as separate gateway provider
   if (getProviderMeta(provider)?.extraModels) return provider;
+  // Plan maps to a built-in provider with the same ID
+  if (getProviderMeta(provider)?.catalogProvider === provider) return provider;
   // Otherwise use parent's name
   return parent;
+}
+
+function getSupplementalModels(provider: LLMProvider): ModelConfig[] {
+  const meta = getProviderMeta(provider);
+  const extra = meta?.extraModels ?? [];
+  const fallback = meta?.fallbackModels ?? [];
+  if (extra.length === 0) return fallback;
+  if (fallback.length === 0) return extra;
+  const seen = new Set(extra.map((m) => m.modelId));
+  return [...extra, ...fallback.filter((m) => !seen.has(m.modelId))];
 }
 
 /** Provider IDs that appear in the subscription tab (all nested plan IDs). */
@@ -854,25 +876,25 @@ export function providerSecretKey(provider: LLMProvider): string {
 /**
  * All known models grouped by provider.
  *
- * At startup this only contains extraModels from PROVIDERS. Once the gateway's
- * models.json is loaded, `initKnownModels()` populates it with OpenClaw's
- * full catalog.
+ * At startup this only contains local supplemental models (runtime extras or
+ * UI-only fallbacks) from PROVIDERS. Once the gateway's models.json is loaded,
+ * `initKnownModels()` populates it with OpenClaw's full catalog.
  */
 // eslint-disable-next-line import/no-mutable-exports
 export let KNOWN_MODELS: Partial<Record<LLMProvider, ModelConfig[]>> =
   Object.fromEntries(
     ALL_PROVIDERS
-      .filter((p) => getProviderMeta(p)?.extraModels)
-      .map((p) => [p, getProviderMeta(p)!.extraModels!]),
+      .map((p) => [p, getSupplementalModels(p)] as const)
+      .filter(([, models]) => models.length > 0),
   );
 
 /**
  * Populate KNOWN_MODELS from the gateway's model catalog.
  *
  * Called by `readFullModelCatalog()` in @easyclaw/gateway after reading
- * models.json. extraModels supplements catalog data — items from extraModels
- * are placed first (they carry richer data like cost) and catalog entries
- * that don't overlap are appended after.
+ * models.json. Local supplemental models (runtime extras or fallback models)
+ * are placed first because they carry richer local metadata like cost, and
+ * catalog entries that don't overlap are appended after.
  */
 export function initKnownModels(
   catalog: Record<string, Array<{ id: string; name: string }>>,
@@ -887,18 +909,20 @@ export function initKnownModels(
       modelId: e.id,
       displayName: e.name,
     }));
-    const extra = getProviderMeta(p)?.extraModels ?? [];
-    const extraIds = new Set(extra.map((m) => m.modelId));
-    // extraModels first (richer data with cost), then catalog entries not in extraModels
-    result[p] = [...extra, ...catalogModels.filter((m) => !extraIds.has(m.modelId))];
+    const supplemental = getSupplementalModels(p);
+    const supplementalIds = new Set(supplemental.map((m) => m.modelId));
+    result[p] = [
+      ...supplemental,
+      ...catalogModels.filter((m) => !supplementalIds.has(m.modelId)),
+    ];
   }
 
-  // Include extraModels-only providers not in catalog at all
+  // Include providers that only have local supplemental models.
   for (const p of ALL_PROVIDERS) {
     if (result[p]) continue;
-    const extra = getProviderMeta(p)?.extraModels;
-    if (extra && extra.length > 0) {
-      result[p] = extra;
+    const supplemental = getSupplementalModels(p);
+    if (supplemental.length > 0) {
+      result[p] = supplemental;
     }
   }
 

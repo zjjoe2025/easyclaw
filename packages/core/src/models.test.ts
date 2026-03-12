@@ -30,14 +30,30 @@ describe("PROVIDERS extraModels", () => {
       }
     }
   });
+
+  it("should have valid model configs for all fallbackModels", () => {
+    for (const provider of ALL_PROVIDERS) {
+      const models = getProviderMeta(provider)?.fallbackModels;
+      if (!models) continue;
+      for (const model of models) {
+        expect(model.provider).toBe(provider);
+        expect(model.modelId).toBeTruthy();
+        expect(model.displayName).toBeTruthy();
+      }
+    }
+  });
 });
 
 describe("KNOWN_MODELS (before initKnownModels)", () => {
-  it("should initially contain only extraModels providers", () => {
-    // Before initKnownModels is called, KNOWN_MODELS only has providers with extraModels
+  it("should initially contain only providers with local supplemental models", () => {
     for (const provider of ALL_PROVIDERS) {
-      if (!getProviderMeta(provider)?.extraModels) continue;
-      expect(KNOWN_MODELS[provider]).toBeDefined();
+      const meta = getProviderMeta(provider);
+      const hasSupplemental = Boolean(meta?.extraModels || meta?.fallbackModels);
+      if (hasSupplemental) {
+        expect(KNOWN_MODELS[provider]).toBeDefined();
+      } else {
+        expect(KNOWN_MODELS[provider]).toBeUndefined();
+      }
     }
   });
 
@@ -73,12 +89,12 @@ describe("initKnownModels", () => {
     expect(KNOWN_MODELS.openai![0].modelId).toBe("gpt-4o");
     expect(KNOWN_MODELS.openai![0].provider).toBe("openai");
     expect(KNOWN_MODELS.anthropic).toHaveLength(1);
-    // deepseek has 2 extraModels; catalog entry overlaps with one → merged to 2
+    // deepseek has 2 supplemental models; catalog entry overlaps with one → merged to 2
     expect(KNOWN_MODELS.deepseek).toHaveLength(2);
     expect(KNOWN_MODELS.deepseek![0].modelId).toBe("deepseek-chat");
   });
 
-  it("should merge extraModels with catalog entries (supplement, not replace)", () => {
+  it("should merge supplemental models with catalog entries (supplement, not replace)", () => {
     const catalog = {
       volcengine: [
         { id: "some-other-model", name: "Other Model" },
@@ -87,7 +103,7 @@ describe("initKnownModels", () => {
 
     initKnownModels(catalog);
 
-    // extraModels should be present
+    // local supplemental models should be present
     const ids = KNOWN_MODELS.volcengine!.map((m) => m.modelId);
     for (const extra of PROVIDERS.volcengine.extraModels!) {
       expect(ids).toContain(extra.modelId);
@@ -182,12 +198,13 @@ describe("getDefaultModelForProvider", () => {
   });
 
   it("should return undefined for providers with no models", () => {
-    initKnownModels({}); // empty catalog — only extraModels
+    initKnownModels({}); // empty catalog — only local supplemental models
 
     for (const provider of ALL_PROVIDERS) {
       const model = getDefaultModelForProvider(provider);
-      if (getProviderMeta(provider)?.extraModels) {
-        // extraModels providers should return real model data
+      const meta = getProviderMeta(provider);
+      if (meta?.extraModels || meta?.fallbackModels) {
+        // providers with local supplemental models should return real model data
         expect(model).toBeDefined();
         expect(model!.modelId).not.toBe(provider);
       } else {
@@ -220,7 +237,7 @@ describe("getModelsForProvider", () => {
   });
 
   it("should return local fallback models for openai-codex", () => {
-    initKnownModels({}); // empty catalog — only extraModels
+    initKnownModels({}); // empty catalog — only local supplemental models
 
     const models = getModelsForProvider("openai-codex");
     const ids = models.map((m) => m.modelId);
@@ -231,18 +248,19 @@ describe("getModelsForProvider", () => {
   });
 
   it("should return empty array for providers with no models", () => {
-    initKnownModels({}); // empty catalog — only EXTRA_MODELS
+    initKnownModels({}); // empty catalog — only local supplemental models
 
-    // Providers without EXTRA_MODELS should return empty array
+    // Providers without local supplemental models should return empty array
     const models = getModelsForProvider("openai");
     expect(models).toEqual([]);
   });
 
-  it("should return extraModels even with empty catalog", () => {
+  it("should return local supplemental models even with empty catalog", () => {
     initKnownModels({}); // empty catalog
 
     for (const provider of ALL_PROVIDERS) {
-      const expectedModels = getProviderMeta(provider)?.extraModels;
+      const meta = getProviderMeta(provider);
+      const expectedModels = meta?.extraModels ?? meta?.fallbackModels;
       if (!expectedModels) continue;
       const models = getModelsForProvider(provider);
       expect(models.length).toBe(expectedModels.length);
@@ -336,7 +354,7 @@ describe("resolveGatewayProvider", () => {
     expect(resolveGatewayProvider("gemini")).toBe("google");
   });
 
-  it("should keep subscription plans with extraModels as-is", () => {
+  it("should keep standalone subscription plans as-is", () => {
     expect(resolveGatewayProvider("openai-codex")).toBe("openai-codex");
     expect(resolveGatewayProvider("zhipu-coding")).toBe("zhipu-coding");
     expect(resolveGatewayProvider("moonshot-coding")).toBe("moonshot-coding");

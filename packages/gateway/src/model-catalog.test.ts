@@ -187,14 +187,15 @@ describe("readFullModelCatalog", () => {
     mocks.readFileSync.mockReset().mockReturnValue("{}");
   });
 
-  it("should return EXTRA_MODELS when no vendor or gateway data exists", async () => {
+  it("should return local supplemental models when no vendor or gateway data exists", async () => {
     // existsSync returns false → no vendor models.generated.js, no gateway models.json
     mocks.existsSync.mockReturnValue(false);
     const result = await readFullModelCatalog({ EASYCLAW_STATE_DIR: "/tmp/fake" });
 
-    // Should contain extraModels providers (volcengine, zhipu, zhipu-coding)
+    // Should contain providers backed by local supplemental models.
     for (const provider of ALL_PROVIDERS) {
-      if (!getProviderMeta(provider)?.extraModels) continue;
+      const meta = getProviderMeta(provider);
+      if (!meta?.extraModels && !meta?.fallbackModels) continue;
       expect(result[provider]).toBeDefined();
       expect(result[provider]!.length).toBeGreaterThan(0);
     }
@@ -211,7 +212,7 @@ describe("readFullModelCatalog", () => {
     }
   });
 
-  it("should merge gateway models with EXTRA_MODELS", async () => {
+  it("should merge gateway models with local supplemental models", async () => {
     // existsSync: true for gateway models.json path, false for vendor
     mocks.existsSync.mockImplementation((p: string) =>
       String(p).includes(join("agents", "main", "agent", "models.json")),
@@ -230,19 +231,21 @@ describe("readFullModelCatalog", () => {
     expect(result.openai).toBeDefined();
     expect(result.openai![0].id).toBe("gpt-4o");
 
-    // EXTRA_MODELS provider
+    // Local supplemental provider
     expect(result.volcengine).toBeDefined();
     expect(result.volcengine!.length).toBeGreaterThan(0);
   });
 
-  it("should always populate KNOWN_MODELS (even with only EXTRA_MODELS)", async () => {
+  it("should always populate KNOWN_MODELS (even with only local supplemental models)", async () => {
     mocks.existsSync.mockReturnValue(false);
     await readFullModelCatalog({ EASYCLAW_STATE_DIR: "/tmp/fake" });
 
     const { KNOWN_MODELS } = await import("@easyclaw/core");
-    // At minimum, EXTRA_MODELS providers should be in KNOWN_MODELS
+    // At minimum, local supplemental providers should be in KNOWN_MODELS
     expect(KNOWN_MODELS.volcengine).toBeDefined();
     expect(KNOWN_MODELS.volcengine!.length).toBeGreaterThan(0);
+    expect(KNOWN_MODELS["openai-codex"]).toBeDefined();
+    expect(KNOWN_MODELS["openai-codex"]!.some((m) => m.modelId === "gpt-5.2-codex")).toBe(true);
   });
 
   it("should populate KNOWN_MODELS with gateway models", async () => {
@@ -311,7 +314,7 @@ describe("readFullModelCatalog", () => {
     expect(result.gemini!.map((m) => m.id)).toContain("gemini-2.5-flash");
   });
 
-  it("should NOT override subscription plans that have their own extraModels", async () => {
+  it("should keep subscription plans with local supplemental models separate", async () => {
     mocks.existsSync.mockReturnValue(false);
     const result = await readFullModelCatalog({ EASYCLAW_STATE_DIR: "/tmp/fake" });
 
@@ -320,6 +323,10 @@ describe("readFullModelCatalog", () => {
     expect(result["zhipu-coding"]!.some((m) => m.id === "glm-5")).toBe(true);
     // zhipu-coding should have fewer models than zhipu (6 vs 12)
     expect(result["zhipu-coding"]!.length).toBeLessThan(result.zhipu!.length);
+
+    // openai-codex is fallback-only and should keep its own list instead of inheriting openai.
+    expect(result["openai-codex"]).toBeDefined();
+    expect(result["openai-codex"]!.some((m) => m.id === "gpt-5.2-codex")).toBe(true);
   });
 
   it("should supplement (not replace) gateway models with extraModels", async () => {
@@ -368,5 +375,24 @@ describe("readFullModelCatalog", () => {
     // Duplicate should not appear — gateway model kept, extraModels appends non-overlapping
     const matchingIds = result.volcengine!.filter((m) => m.id === firstExtra.modelId);
     expect(matchingIds).toHaveLength(1);
+  });
+
+  it("should supplement openai-codex gateway models with fallback models", async () => {
+    mocks.existsSync.mockImplementation((p: string) =>
+      String(p).includes(join("agents", "main", "agent", "models.json")),
+    );
+    mocks.readFileSync.mockReturnValue(JSON.stringify({
+      providers: {
+        "openai-codex": {
+          models: [{ id: "vendor-only-codex", name: "Vendor Only Codex" }],
+        },
+      },
+    }));
+
+    const result = await readFullModelCatalog({ EASYCLAW_STATE_DIR: "/tmp/fake" });
+    const ids = result["openai-codex"]!.map((m) => m.id);
+
+    expect(ids).toContain("vendor-only-codex");
+    expect(ids).toContain("gpt-5.2-codex");
   });
 });

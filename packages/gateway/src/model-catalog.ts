@@ -3,12 +3,27 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveOpenClawStateDir } from "./config-writer.js";
 import { resolveVendorDir } from "./vendor.js";
-import { ALL_PROVIDERS, getProviderMeta, initKnownModels, PROVIDERS, type RootProvider } from "@easyclaw/core";
+import { ALL_PROVIDERS, getProviderMeta, initKnownModels, PROVIDERS, type LLMProvider, type RootProvider } from "@easyclaw/core";
 
 /** A minimal model entry for the UI (no secrets, no cost data). */
 export interface CatalogModelEntry {
   id: string;
   name: string;
+}
+
+function getSupplementalCatalogEntries(provider: LLMProvider): CatalogModelEntry[] {
+  const meta = getProviderMeta(provider);
+  const models = [...(meta?.extraModels ?? []), ...(meta?.fallbackModels ?? [])];
+  const seen = new Set<string>();
+  const result: CatalogModelEntry[] = [];
+
+  for (const model of models) {
+    if (seen.has(model.modelId)) continue;
+    seen.add(model.modelId);
+    result.push({ id: model.modelId, name: model.displayName });
+  }
+
+  return result;
 }
 
 /**
@@ -246,7 +261,7 @@ export async function readVendorModelCatalog(
  * Returns the full model catalog by merging:
  * 1. Vendor (pi-ai) built-in models (700+ models, the base)
  * 2. Gateway models.json entries (override per-provider)
- * 3. EXTRA_MODELS (our own additions like volcengine)
+ * 3. Local supplemental models (runtime extras plus UI-only fallbacks)
  *
  * Then normalizes (alias mapping + sorting) and populates KNOWN_MODELS.
  */
@@ -262,13 +277,12 @@ export async function readFullModelCatalog(
   // Gateway entries override vendor entries per provider
   const merged = { ...vendor, ...gateway };
 
-  // extraModels supplements vendor/gateway data — append models that the
-  // vendor catalog doesn't already provide. For providers not in the vendor
-  // catalog at all (e.g. deepseek, qwen), extraModels is the sole source.
+  // Local supplemental models append entries that vendor/gateway do not yet
+  // provide. For some providers this is runtime-only data (`extraModels`);
+  // for others, such as openai-codex, this is UI/catalog fallback data.
   for (const p of ALL_PROVIDERS) {
-    const models = getProviderMeta(p)?.extraModels;
-    if (models) {
-      const extras = models.map((m) => ({ id: m.modelId, name: m.displayName }));
+    const extras = getSupplementalCatalogEntries(p);
+    if (extras.length > 0) {
       const existing = merged[p] ?? [];
       const existingIds = new Set(existing.map((e) => e.id));
       merged[p] = [...existing, ...extras.filter((e) => !existingIds.has(e.id))];

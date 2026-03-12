@@ -4,9 +4,12 @@ import { ALL_PROVIDERS, SUBSCRIPTION_PROVIDER_IDS, getProviderMeta } from "@easy
 import type { LLMProvider } from "@easyclaw/core";
 import { fetchModelCatalog } from "../api/index.js";
 
-/** Providers with extraModels are always shown (statically defined, not catalog-dependent). */
-const EXTRA_MODEL_PROVIDERS = new Set(
-  ALL_PROVIDERS.filter((p) => getProviderMeta(p)?.extraModels),
+/** Providers with local supplemental models are always shown. */
+const SUPPLEMENTAL_MODEL_PROVIDERS = new Set(
+  ALL_PROVIDERS.filter((p) => {
+    const meta = getProviderMeta(p);
+    return Boolean(meta?.extraModels || meta?.fallbackModels);
+  }),
 );
 
 /** Subscription plan providers are always shown (they share models with their parent). */
@@ -68,7 +71,7 @@ export function ProviderSelect({
   // Sort providers by locale-specific priority, then alphabetically.
   const sortedProviders = useMemo(() => {
     const all = ALL_PROVIDERS.filter((p) =>
-      EXTRA_MODEL_PROVIDERS.has(p) || SUBSCRIPTION_SET.has(p) || !catalogProviders || catalogProviders.has(p),
+      SUPPLEMENTAL_MODEL_PROVIDERS.has(p) || SUBSCRIPTION_SET.has(p) || !catalogProviders || catalogProviders.has(p),
     );
     const available = filterProviders
       ? all.filter((p) => filterProviders.includes(p))

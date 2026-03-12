@@ -885,6 +885,11 @@ describe("config-writer", () => {
       const glm45 = configs.zhipu.models.find((m) => m.id === "glm-4.5");
       expect(glm45?.input).toEqual(["text"]);
     });
+
+    it("does not override the built-in openai-codex provider", () => {
+      const configs = buildExtraProviderConfigs();
+      expect(configs["openai-codex"]).toBeUndefined();
+    });
   });
 
   describe("writeGatewayConfig - nested unknown key sanitisation", () => {
@@ -1138,7 +1143,7 @@ describe("config-writer", () => {
       const result = OpenClawSchema.safeParse(config);
       if (!result.success) {
         const messages = result.error.issues.map(
-          (i) => `  ${i.path.join(".")}: ${i.message}`,
+          (i: { path: Array<string | number>; message: string }) => `  ${i.path.join(".")}: ${i.message}`,
         );
         expect.fail(
           `Default config fails OpenClaw schema validation:\n${messages.join("\n")}\n` +
@@ -1167,8 +1172,8 @@ describe("config-writer", () => {
       const result = OpenClawSchema.safeParse(config);
       if (!result.success) {
         const messages = result.error.issues
-          .filter((i) => i.code !== "unrecognized_keys")
-          .map((i) => `  ${i.path.join(".")}: ${i.message}`);
+          .filter((i: { code: string }) => i.code !== "unrecognized_keys")
+          .map((i: { path: Array<string | number>; message: string }) => `  ${i.path.join(".")}: ${i.message}`);
         if (messages.length > 0) {
           expect.fail(
             `writeGatewayConfig output fails OpenClaw schema validation:\n${messages.join("\n")}\n` +
